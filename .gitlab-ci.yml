@@ -1,0 +1,93 @@
+## Global
+variables:
+  TAG_RUNNER: minikube
+  DOCKER_DRIVER: "overlay2" # ビルド速度を向上する為のおまじない
+  DOCKER_REGISTORY: "docker.io"
+  DOCKER_REPOSITORY: "${DOCKER_REGISTORY}/${DOCKER_USER}/prefect"
+
+# Stages
+stages:
+  - build # Prefect Deployに使う${ENV}/Dockerfileをbuildしpushします。
+  - deploy # Prefect Deployを${ENV}/Dockerfileのイメージをpullして実行します
+#  - clean # Prefect Deployをした後、不要となったDocker中間イメージや終了済イメージをクリアします。
+
+## Build
+
+# テンプレート隠しJobとして定義。このJobは単体で実行されません。
+# Runner側でkanikoを使い、Docker in Dockerでビルドを行います。
+# https://gitlab-docs.creationline.com/ee/ci/docker/using_kaniko.html
+# https://qiita.com/Aruneko/items/7d4474444ff92b76aa88
+.build-docker:
+  tags:
+    - $TAG_RUNNER
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  script:
+    # 1. ID/PASSでログインする場合
+    # DOCKER_USER及びDOCKER_PASSWORDはGitlab側でVariableとして宣言してください。
+    # DOCKER_PASSWORDが複雑な文字列を含む場合はPersonal Access Tokenを発行し、それをDOCKER_PASSWORDにセットしてください。
+    # - echo "{\"auths\":{\"https://index.docker.io/v1/\":{\"username\":\"${DOCKER_USER}\",\"password\":\"${DOCKER_PASSWORD}\"}}}" > /kaniko/.docker/config.json
+    # 2. AUTH_TOKENでログインする場合
+    # echo -n <DOCKER_USER>:<DOCKER_PASSWORD> | base64 の結果をGitlab側のVariableで、DOCKER_AUTH_TOKENとして宣言してください。
+    # ここでも、DOCKER_PASSWORDが複雑な文字列を含む場合はPersonal Access Tokenを発行し、それをDOCKER_PASSWORDにセットしてください。
+    - echo "{\"auths\":{\"https://index.docker.io/v1/\":{\"auth\":\"${DOCKER_AUTH_TOKEN}\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor
+      --cache=true
+      --cache-repo=${DOCKER_REPOSITORY}
+      --context ${CI_PROJECT_DIR}/${ENV}
+      --dockerfile ${CI_PROJECT_DIR}/${ENV}/Dockerfile
+      --destination ${DOCKER_REPOSITORY}:${ENV}
+
+# テンプレートを継承し、dev/フォルダ配下のファイルが変更された場合に発火します。
+build-docker-dev:
+  extends: .build-docker
+  variables:
+    ENV: dev
+  rules:
+    - changes:
+      - dev/**/*
+
+# テンプレートを継承し、prod/フォルダ配下のファイルが変更された場合に発火します。
+# build-docker-prod:
+#   extends: .build-docker
+#   variables:
+#     ENV: prod
+#   rules:
+#     - changes:
+#       - prod/**/*
+
+## Deploy
+
+.deploy-prefect:
+  tags:
+    - $TAG_RUNNER
+  stage: deploy
+  image:
+    name: prefecthq/prefect:2.19.5-python3.11
+    entrypoint: [""]
+  script:
+    - cd ${CI_PROJECT_DIR}/${ENV}
+    - prefect deploy
+
+# テンプレートを継承し、dev/フォルダ配下のファイルが変更された場合に発火します。
+deploy-prefect-dev:
+  extends: .deploy-prefect
+  needs: ["build-docker-dev"]
+  variables:
+    ENV: dev
+  rules:
+    - changes:
+      - dev/**/*
+
+# テンプレートを継承し、prod/フォルダ配下のファイルが変更された場合に発火します。
+# deploy-prefect-prod:
+#   extends: .deploy-prefect
+#   needs: ["build-docker-prod"]
+#   variables:
+#     ENV: prod
+#   rules:
+#     - changes:
+#       - prod/**/*
+

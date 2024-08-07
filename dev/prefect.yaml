@@ -35,4 +35,5 @@ deployments:
       namespace: prefect
       service_account_name: prefect
       image_pull_policy: Always
+      finished_job_ttl: 30
 # - name: "Deployment Flow 2"
